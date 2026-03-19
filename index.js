@@ -14,7 +14,7 @@ const {
   Routes
 } = require('discord.js');
 
-console.log('NEW CLAIM EMBED CODE ACTIVE');
+console.log('HR + EVENT TICKET SYSTEM ACTIVE');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -25,9 +25,16 @@ const CLIENT_ID = '1484192795777433680';
 const GUILD_ID = '1475150576361803776';
 
 const PANEL_CHANNEL_ID = '1483077963661574244';
-const TICKET_CATEGORY_ID = '1475335652420620471';
+
+// HR
+const HR_CATEGORY_ID = '1475335652420620471';
 const HRM_ROLE_ID = '1476659899961442407';
 const HRT_ROLE_ID = '1476659748257402982';
+
+// EVENT
+const EVENT_CATEGORY_ID = '1475335652420620471';
+const EVENT_MANAGER_ROLE_ID = '1482123095082012886';
+const EVENT_TEAM_ROLE_ID = '1476659748257402982';
 
 // Aynı anda 2 ticket açılmasını engeller
 const pendingTicketOpens = new Set();
@@ -77,50 +84,61 @@ function sanitizeChannelName(username) {
 }
 
 function parseTicketTopic(topic) {
-  if (!topic) return { ownerId: null, claimedBy: null };
+  if (!topic) {
+    return { ownerId: null, claimedBy: null, type: null };
+  }
 
   const ownerMatch = topic.match(/owner:(\d+)/);
   const claimedMatch = topic.match(/claimed:(\d+)/);
+  const typeMatch = topic.match(/type:([a-z]+)/);
 
   return {
     ownerId: ownerMatch ? ownerMatch[1] : null,
-    claimedBy: claimedMatch ? claimedMatch[1] : null
+    claimedBy: claimedMatch ? claimedMatch[1] : null,
+    type: typeMatch ? typeMatch[1] : null
   };
 }
 
-function buildTicketTopic(ownerId, claimedBy = null) {
-  return claimedBy
-    ? `owner:${ownerId}|claimed:${claimedBy}`
-    : `owner:${ownerId}`;
+function buildTicketTopic(ownerId, type, claimedBy = null) {
+  let topic = `owner:${ownerId}|type:${type}`;
+  if (claimedBy) topic += `|claimed:${claimedBy}`;
+  return topic;
 }
 
-function isStaff(member) {
+function isHrStaff(member) {
   if (!member?.roles?.cache) return false;
   return member.roles.cache.has(HRM_ROLE_ID) || member.roles.cache.has(HRT_ROLE_ID);
 }
 
+function isEventStaff(member) {
+  if (!member?.roles?.cache) return false;
+  return member.roles.cache.has(EVENT_MANAGER_ROLE_ID) || member.roles.cache.has(EVENT_TEAM_ROLE_ID);
+}
+
+function canClaimTicket(member, type) {
+  if (type === 'hr') return isHrStaff(member);
+  if (type === 'event') return isEventStaff(member);
+  return false;
+}
+
+function canCloseTicket(member, userId, ownerId, type) {
+  if (userId === ownerId) return true;
+  if (type === 'hr') return isHrStaff(member);
+  if (type === 'event') return isEventStaff(member);
+  return false;
+}
+
 function buildPanelEmbed() {
   return new EmbedBuilder()
-    .setTitle('📩 Apply Now')
+    .setTitle('📩 Apply / Contact')
     .setDescription(
-`Hello, do you want to join us?
-Please read the rules first.
+`Please choose the ticket type below.
 
-Thank you for reading the rules.
+🎫 HR Ticket
+Use this for applications and HR-related topics.
 
-Below you can see the availability status of the roles within our team.
-CC Member <@&1483082794254204998>
-Media Team <@&1483082794254204998>
-Media Manager <@&1483082794254204998>
-HR Team <@&1483082794254204998>
-HR Manager <@&1483082794254204998>
-Event Team <@&1483082794254204998>
-Event Manager <@&1483082794254204998>
-Event Assistance <@&1483082794254204998>
-Event Supervisior <@&1483082794254204998>
-Community Manager <@&1483082890962145452>
-
-Please do not hesitate to apply to us.`
+🎉 Event Ticket
+Use this for event management and event-related topics.`
     )
     .setColor('#5865F2');
 }
@@ -128,10 +146,16 @@ Please do not hesitate to apply to us.`
 function buildPanelRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('ticket_open')
-      .setLabel('Open Ticket')
-      .setEmoji('🎫')
-      .setStyle(ButtonStyle.Primary)
+      .setCustomId('ticket_open_hr')
+      .setLabel('Open HR Ticket')
+      .setEmoji('📩')
+      .setStyle(ButtonStyle.Primary),
+
+    new ButtonBuilder()
+      .setCustomId('ticket_open_event')
+      .setLabel('Open Event Ticket')
+      .setEmoji('🎉')
+      .setStyle(ButtonStyle.Success)
   );
 }
 
@@ -155,6 +179,125 @@ function buildTicketButtons(claimedBy = null, claimerName = null) {
   );
 }
 
+async function createTicket(interaction, type) {
+  const guild = interaction.guild;
+  const member = interaction.member;
+  const userId = member.id;
+  const pendingKey = `${type}-${userId}`;
+
+  if (pendingTicketOpens.has(pendingKey)) {
+    return interaction.reply({
+      content: 'Your ticket is already being created. Please wait a moment.',
+      ephemeral: true
+    });
+  }
+
+  pendingTicketOpens.add(pendingKey);
+
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    await guild.channels.fetch();
+
+    const existing = guild.channels.cache.find(c => {
+      if (c.type !== ChannelType.GuildText) return false;
+
+      const data = parseTicketTopic(c.topic);
+      return data.ownerId === userId && data.type === type;
+    });
+
+    if (existing) {
+      return interaction.editReply({
+        content: `You already have an open ${type} ticket: ${existing}`
+      });
+    }
+
+    let categoryId;
+    let roleIds;
+    let channelPrefix;
+    let mentionText;
+    let embedTitle;
+    let embedDescription;
+
+    if (type === 'hr') {
+      categoryId = HR_CATEGORY_ID;
+      roleIds = [HRM_ROLE_ID, HRT_ROLE_ID];
+      channelPrefix = 'hr-ticket';
+      mentionText = `${member} <@&${HRM_ROLE_ID}> <@&${HRT_ROLE_ID}>`;
+      embedTitle = '📩 HR Ticket Created';
+      embedDescription = `${member}, please describe your HR issue or application in detail.`;
+    } else {
+      categoryId = EVENT_CATEGORY_ID;
+      roleIds = [EVENT_MANAGER_ROLE_ID, EVENT_TEAM_ROLE_ID];
+      channelPrefix = 'event-ticket';
+      mentionText = `${member} <@&${EVENT_MANAGER_ROLE_ID}> <@&${EVENT_TEAM_ROLE_ID}>`;
+      embedTitle = '🎉 Event Ticket Created';
+      embedDescription = `${member}, please describe your event request in detail.`;
+    }
+
+    const channelName = `${channelPrefix}-${sanitizeChannelName(interaction.user.username)}-${userId.slice(-4)}`;
+
+    const permissionOverwrites = [
+      {
+        id: guild.id,
+        deny: [PermissionFlagsBits.ViewChannel]
+      },
+      {
+        id: userId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      }
+    ];
+
+    for (const roleId of roleIds) {
+      permissionOverwrites.push({
+        id: roleId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      });
+    }
+
+    const ticketChannel = await guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: categoryId,
+      topic: buildTicketTopic(userId, type),
+      permissionOverwrites
+    });
+
+    const ticketEmbed = new EmbedBuilder()
+      .setTitle(embedTitle)
+      .setDescription(embedDescription)
+      .setColor(type === 'hr' ? '#57F287' : '#5865F2')
+      .setTimestamp();
+
+    await ticketChannel.send({
+      content: mentionText,
+      embeds: [ticketEmbed],
+      components: [buildTicketButtons()]
+    });
+
+    return interaction.editReply({
+      content: `Your ${type} ticket has been created: ${ticketChannel}`
+    });
+  } catch (error) {
+    console.error(`${type} ticket open error:`, error);
+
+    if (interaction.deferred) {
+      return interaction.editReply({
+        content: `An error occurred while creating the ${type} ticket.`
+      });
+    }
+  } finally {
+    pendingTicketOpens.delete(pendingKey);
+  }
+}
+
 // ===== READY =====
 client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -166,7 +309,7 @@ client.on('interactionCreate', async interaction => {
     // ===== SLASH COMMANDS =====
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'underreview') {
-        if (!isStaff(interaction.member)) {
+        if (!isHrStaff(interaction.member)) {
           return interaction.reply({
             content: 'You do not have permission to use this command.',
             ephemeral: true
@@ -196,7 +339,7 @@ Kind regards`
       }
 
       if (interaction.commandName === 'rejected') {
-        if (!isStaff(interaction.member)) {
+        if (!isHrStaff(interaction.member)) {
           return interaction.reply({
             content: 'You do not have permission to use this command.',
             ephemeral: true
@@ -225,7 +368,7 @@ Kind regards`
       }
 
       if (interaction.commandName === 'accepted') {
-        if (!isStaff(interaction.member)) {
+        if (!isHrStaff(interaction.member)) {
           return interaction.reply({
             content: 'You do not have permission to use this command.',
             ephemeral: true
@@ -253,7 +396,7 @@ Kind regards`
       }
 
       if (interaction.commandName === 'sendpanel') {
-        if (!isStaff(interaction.member)) {
+        if (!isHrStaff(interaction.member) && !isEventStaff(interaction.member)) {
           return interaction.reply({
             content: 'You do not have permission to use this command.',
             ephemeral: true
@@ -286,123 +429,31 @@ Kind regards`
     // ===== BUTTONS =====
     if (!interaction.isButton()) return;
 
-    // ===== OPEN TICKET =====
-    if (interaction.customId === 'ticket_open') {
-      const guild = interaction.guild;
-      const member = interaction.member;
-      const userId = member.id;
-
-      if (pendingTicketOpens.has(userId)) {
-        return interaction.reply({
-          content: 'Your ticket is already being created. Please wait a moment.',
-          ephemeral: true
-        });
-      }
-
-      pendingTicketOpens.add(userId);
-
-      try {
-        await interaction.deferReply({ ephemeral: true });
-        await guild.channels.fetch();
-
-        const existing = guild.channels.cache.find(c => {
-          if (c.type !== ChannelType.GuildText) return false;
-          if (c.parentId !== TICKET_CATEGORY_ID) return false;
-
-          const { ownerId } = parseTicketTopic(c.topic);
-          return ownerId === userId;
-        });
-
-        if (existing) {
-          return interaction.editReply({
-            content: `You already have an open ticket: ${existing}`
-          });
-        }
-
-        const channelName = `ticket-${sanitizeChannelName(interaction.user.username)}-${userId.slice(-4)}`;
-
-        const ticketChannel = await guild.channels.create({
-          name: channelName,
-          type: ChannelType.GuildText,
-          parent: TICKET_CATEGORY_ID,
-          topic: buildTicketTopic(userId),
-          permissionOverwrites: [
-            {
-              id: guild.id,
-              deny: [PermissionFlagsBits.ViewChannel]
-            },
-            {
-              id: userId,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-              ]
-            },
-            {
-              id: HRM_ROLE_ID,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-              ]
-            },
-            {
-              id: HRT_ROLE_ID,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory
-              ]
-            }
-          ]
-        });
-
-        const ticketEmbed = new EmbedBuilder()
-          .setTitle('🎫 Ticket Created')
-          .setDescription(`${member}, please describe your issue in detail.`)
-          .setColor('#57F287')
-          .setTimestamp();
-
-        await ticketChannel.send({
-          content: `${member} <@&${HRM_ROLE_ID}> <@&${HRT_ROLE_ID}>`,
-          embeds: [ticketEmbed],
-          components: [buildTicketButtons()]
-        });
-
-        return interaction.editReply({
-          content: `Your ticket has been created: ${ticketChannel}`
-        });
-      } catch (error) {
-        console.error('Ticket open error:', error);
-
-        if (interaction.deferred) {
-          return interaction.editReply({
-            content: 'An error occurred while creating the ticket.'
-          });
-        }
-      } finally {
-        pendingTicketOpens.delete(userId);
-      }
-
-      return;
+    // OPEN HR TICKET
+    if (interaction.customId === 'ticket_open_hr') {
+      return createTicket(interaction, 'hr');
     }
 
-    // ===== CLAIM =====
+    // OPEN EVENT TICKET
+    if (interaction.customId === 'ticket_open_event') {
+      return createTicket(interaction, 'event');
+    }
+
+    // CLAIM
     if (interaction.customId === 'ticket_claim') {
-      if (!isStaff(interaction.member)) {
+      const channel = interaction.channel;
+      const { ownerId, claimedBy, type } = parseTicketTopic(channel.topic);
+
+      if (!ownerId || !type) {
         return interaction.reply({
-          content: 'You do not have permission to claim tickets.',
+          content: 'This is not a valid ticket.',
           ephemeral: true
         });
       }
 
-      const channel = interaction.channel;
-      const { ownerId, claimedBy } = parseTicketTopic(channel.topic);
-
-      if (!ownerId) {
+      if (!canClaimTicket(interaction.member, type)) {
         return interaction.reply({
-          content: 'This is not a valid ticket.',
+          content: 'You do not have permission to claim this ticket.',
           ephemeral: true
         });
       }
@@ -414,7 +465,7 @@ Kind regards`
         });
       }
 
-      await channel.setTopic(buildTicketTopic(ownerId, interaction.user.id));
+      await channel.setTopic(buildTicketTopic(ownerId, type, interaction.user.id));
 
       await interaction.update({
         components: [buildTicketButtons(interaction.user.id, interaction.user.username)]
@@ -422,7 +473,7 @@ Kind regards`
 
       const claimEmbed = new EmbedBuilder()
         .setTitle('🛄 Ticket Claimed')
-        .setDescription(`This ticket has been claimed by ${interaction.user}.`)
+        .setDescription(`This ${type} ticket has been claimed by ${interaction.user}.`)
         .setColor('#5865F2')
         .setTimestamp();
 
@@ -433,24 +484,21 @@ Kind regards`
       return;
     }
 
-    // ===== CLOSE =====
+    // CLOSE
     if (interaction.customId === 'ticket_close') {
       const channel = interaction.channel;
-      const { ownerId } = parseTicketTopic(channel.topic);
+      const { ownerId, type } = parseTicketTopic(channel.topic);
 
-      if (!ownerId) {
+      if (!ownerId || !type) {
         return interaction.reply({
           content: 'This is not a valid ticket.',
           ephemeral: true
         });
       }
 
-      const ticketOwnerCanClose = interaction.user.id === ownerId;
-      const staffCanClose = isStaff(interaction.member);
-
-      if (!ticketOwnerCanClose && !staffCanClose) {
+      if (!canCloseTicket(interaction.member, interaction.user.id, ownerId, type)) {
         return interaction.reply({
-          content: 'Only the ticket owner or HR staff can close this ticket.',
+          content: 'Only the ticket owner or related staff can close this ticket.',
           ephemeral: true
         });
       }
