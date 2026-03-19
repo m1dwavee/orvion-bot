@@ -14,7 +14,7 @@ const {
   Routes
 } = require('discord.js');
 
-console.log('HR + EVENT TICKET SYSTEM ACTIVE');
+console.log('HR + EVENT + MANAGEMENT TICKET SYSTEM ACTIVE');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -35,6 +35,10 @@ const HRT_ROLE_ID = '1476659748257402982';
 const EVENT_CATEGORY_ID = '1475335652420620471';
 const EVENT_MANAGER_ROLE_ID = '1482123095082012886';
 const EVENT_TEAM_ROLE_ID = '1476658320009072707';
+
+// MANAGEMENT
+const MANAGEMENT_CATEGORY_ID = '1475335652420620471';
+const FOUNDER_ROLE_ID = '1475225024511082637';
 
 // Aynı anda 2 ticket açılmasını engeller
 const pendingTicketOpens = new Set();
@@ -115,9 +119,15 @@ function isEventStaff(member) {
   return member.roles.cache.has(EVENT_MANAGER_ROLE_ID) || member.roles.cache.has(EVENT_TEAM_ROLE_ID);
 }
 
+function isManagementStaff(member) {
+  if (!member?.roles?.cache) return false;
+  return member.roles.cache.has(FOUNDER_ROLE_ID);
+}
+
 function canClaimTicket(member, type) {
   if (type === 'hr') return isHrStaff(member);
   if (type === 'event') return isEventStaff(member);
+  if (type === 'management') return isManagementStaff(member);
   return false;
 }
 
@@ -125,12 +135,13 @@ function canCloseTicket(member, userId, ownerId, type) {
   if (userId === ownerId) return true;
   if (type === 'hr') return isHrStaff(member);
   if (type === 'event') return isEventStaff(member);
+  if (type === 'management') return isManagementStaff(member);
   return false;
 }
 
 function buildPanelEmbed() {
   return new EmbedBuilder()
-    .setTitle('📩 Apply / Contact')
+    .setTitle('📩 Contact Panel')
     .setDescription(
 `Please choose the ticket type below.
 
@@ -138,12 +149,15 @@ function buildPanelEmbed() {
 Use this for applications and HR-related topics.
 
 🎉 Event Ticket
-Use this for event management and event-related topics.`
+Use this for event management and event-related topics.
+
+👑 Contact Management Team
+You can open a ticket here to contact the founder and for partnerships.`
     )
     .setColor('#5865F2');
 }
 
-function buildPanelRow() {
+function buildPanelRow1() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('ticket_open_hr')
@@ -156,6 +170,16 @@ function buildPanelRow() {
       .setLabel('Open Event Ticket')
       .setEmoji('🎉')
       .setStyle(ButtonStyle.Success)
+  );
+}
+
+function buildPanelRow2() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_open_management')
+      .setLabel('Contact Management Team')
+      .setEmoji('👑')
+      .setStyle(ButtonStyle.Secondary)
   );
 }
 
@@ -227,7 +251,7 @@ async function createTicket(interaction, type) {
       embedTitle = '📩 HR Ticket Created';
       embedDescription = `${member}, please describe your HR issue or application in detail.`;
       embedColor = '#57F287';
-    } else {
+    } else if (type === 'event') {
       categoryId = EVENT_CATEGORY_ID;
       roleIds = [EVENT_MANAGER_ROLE_ID, EVENT_TEAM_ROLE_ID];
       channelPrefix = 'event-ticket';
@@ -235,6 +259,14 @@ async function createTicket(interaction, type) {
       embedTitle = '🎉 Event Ticket Created';
       embedDescription = `${member}, please describe your event request in detail.`;
       embedColor = '#5865F2';
+    } else {
+      categoryId = MANAGEMENT_CATEGORY_ID;
+      roleIds = [FOUNDER_ROLE_ID];
+      channelPrefix = 'management-ticket';
+      mentionText = `${member} <@&${FOUNDER_ROLE_ID}>`;
+      embedTitle = '👑 Management Ticket Created';
+      embedDescription = `${member}, please describe your request, founder contact reason, or partnership offer in detail.`;
+      embedColor = '#FEE75C';
     }
 
     const channelName = `${channelPrefix}-${sanitizeChannelName(interaction.user.username)}-${userId.slice(-4)}`;
@@ -399,7 +431,11 @@ Kind regards`
       }
 
       if (interaction.commandName === 'sendpanel') {
-        if (!isHrStaff(interaction.member) && !isEventStaff(interaction.member)) {
+        if (
+          !isHrStaff(interaction.member) &&
+          !isEventStaff(interaction.member) &&
+          !isManagementStaff(interaction.member)
+        ) {
           return interaction.reply({
             content: 'You do not have permission to use this command.',
             ephemeral: true
@@ -417,7 +453,7 @@ Kind regards`
 
         await channel.send({
           embeds: [buildPanelEmbed()],
-          components: [buildPanelRow()]
+          components: [buildPanelRow1(), buildPanelRow2()]
         });
 
         return interaction.reply({
@@ -432,17 +468,18 @@ Kind regards`
     // ===== BUTTONS =====
     if (!interaction.isButton()) return;
 
-    // OPEN HR TICKET
     if (interaction.customId === 'ticket_open_hr') {
       return createTicket(interaction, 'hr');
     }
 
-    // OPEN EVENT TICKET
     if (interaction.customId === 'ticket_open_event') {
       return createTicket(interaction, 'event');
     }
 
-    // CLAIM
+    if (interaction.customId === 'ticket_open_management') {
+      return createTicket(interaction, 'management');
+    }
+
     if (interaction.customId === 'ticket_claim') {
       const channel = interaction.channel;
       const { ownerId, claimedBy, type } = parseTicketTopic(channel.topic);
@@ -487,7 +524,6 @@ Kind regards`
       return;
     }
 
-    // CLOSE
     if (interaction.customId === 'ticket_close') {
       const channel = interaction.channel;
       const { ownerId, type } = parseTicketTopic(channel.topic);
