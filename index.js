@@ -1,5 +1,4 @@
 require('dotenv').config();
-const fs = require('fs');
 
 const {
   Client,
@@ -18,8 +17,6 @@ const {
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
-
-const PANEL_FILE = './panel.json';
 
 // ===== IDs =====
 const CLIENT_ID = '1484192795777433680';
@@ -76,27 +73,37 @@ function getTicketOwnerId(topic) {
 client.once('clientReady', async () => {
   try {
     const channel = await client.channels.fetch(PANEL_CHANNEL_ID);
-    if (!channel) return console.log('Panel channel not found!');
-
-    let panelData = null;
-
-    if (fs.existsSync(PANEL_FILE)) {
-      try {
-        panelData = JSON.parse(fs.readFileSync(PANEL_FILE, 'utf8'));
-      } catch (err) {
-        console.error('panel.json read error:', err);
-      }
+    if (!channel) {
+      console.log('Panel channel not found!');
+      return;
     }
 
-    if (panelData && panelData.messageId) {
-      try {
-        await channel.messages.fetch(panelData.messageId);
-        console.log('Panel already exists, skipping...');
-        console.log(`Logged in as ${client.user.tag}`);
-        return;
-      } catch {
-        console.log('Saved panel message not found, creating a new one...');
+    const messages = await channel.messages.fetch({ limit: 100 });
+
+    const panelMessages = messages
+      .filter(msg =>
+        msg.author.id === client.user.id &&
+        msg.embeds.length > 0 &&
+        msg.embeds[0].title === '📩 Apply Now'
+      )
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    if (panelMessages.size > 0) {
+      const panelArray = [...panelMessages.values()];
+
+      if (panelArray.length > 1) {
+        for (let i = 1; i < panelArray.length; i++) {
+          try {
+            await panelArray[i].delete();
+          } catch (err) {
+            console.error('Duplicate panel delete error:', err);
+          }
+        }
       }
+
+      console.log('Panel already exists, skipping...');
+      console.log(`Logged in as ${client.user.tag}`);
+      return;
     }
 
     const embed = new EmbedBuilder()
@@ -131,17 +138,12 @@ Please do not hesitate to apply to us.`
         .setStyle(ButtonStyle.Primary)
     );
 
-    const sentMessage = await channel.send({
+    await channel.send({
       embeds: [embed],
       components: [row]
     });
 
-    fs.writeFileSync(
-      PANEL_FILE,
-      JSON.stringify({ messageId: sentMessage.id }, null, 2)
-    );
-
-    console.log('Panel message sent and saved!');
+    console.log('Panel message sent!');
     console.log(`Logged in as ${client.user.tag}`);
   } catch (error) {
     console.error('Panel send error:', error);
