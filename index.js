@@ -32,12 +32,18 @@ const commands = [
   new SlashCommandBuilder()
     .setName('underreview')
     .setDescription('Send under review message'),
+
   new SlashCommandBuilder()
     .setName('rejected')
     .setDescription('Send rejected message'),
+
   new SlashCommandBuilder()
     .setName('accepted')
-    .setDescription('Send accepted message')
+    .setDescription('Send accepted message'),
+
+  new SlashCommandBuilder()
+    .setName('sendpanel')
+    .setDescription('Send the ticket panel')
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -69,46 +75,14 @@ function getTicketOwnerId(topic) {
   return match ? match[1] : null;
 }
 
-// ===== READY =====
-client.once('clientReady', async () => {
-  try {
-    const channel = await client.channels.fetch(PANEL_CHANNEL_ID);
-    if (!channel) {
-      console.log('Panel channel not found!');
-      return;
-    }
+function isStaff(member) {
+  return member.roles.cache.has(HRM_ROLE_ID) || member.roles.cache.has(HRT_ROLE_ID);
+}
 
-    const messages = await channel.messages.fetch({ limit: 100 });
-
-    const panelMessages = messages
-      .filter(msg =>
-        msg.author.id === client.user.id &&
-        msg.embeds.length > 0 &&
-        msg.embeds[0].title === '📩 Apply Now'
-      )
-      .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-    if (panelMessages.size > 0) {
-      const panelArray = [...panelMessages.values()];
-
-      if (panelArray.length > 1) {
-        for (let i = 1; i < panelArray.length; i++) {
-          try {
-            await panelArray[i].delete();
-          } catch (err) {
-            console.error('Duplicate panel delete error:', err);
-          }
-        }
-      }
-
-      console.log('Panel already exists, skipping...');
-      console.log(`Logged in as ${client.user.tag}`);
-      return;
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('📩 Apply Now')
-      .setDescription(
+function buildPanelEmbed() {
+  return new EmbedBuilder()
+    .setTitle('📩 Apply Now')
+    .setDescription(
 `Hello, do you want to join us?
 Please read the rules first.
 
@@ -127,27 +101,23 @@ Event Supervisior <@&1483082794254204998>
 Community Manager <@&1483082890962145452>
 
 Please do not hesitate to apply to us.`
-      )
-      .setColor('#5865F2');
+    )
+    .setColor('#5865F2');
+}
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('ticket_open')
-        .setLabel('Open Ticket')
-        .setEmoji('🎫')
-        .setStyle(ButtonStyle.Primary)
-    );
+function buildPanelRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('ticket_open')
+      .setLabel('Open Ticket')
+      .setEmoji('🎫')
+      .setStyle(ButtonStyle.Primary)
+  );
+}
 
-    await channel.send({
-      embeds: [embed],
-      components: [row]
-    });
-
-    console.log('Panel message sent!');
-    console.log(`Logged in as ${client.user.tag}`);
-  } catch (error) {
-    console.error('Panel send error:', error);
-  }
+// ===== READY =====
+client.once('clientReady', () => {
+  console.log(`Logged in as ${client.user.tag}`);
 });
 
 // ===== INTERACTIONS =====
@@ -156,6 +126,13 @@ client.on('interactionCreate', async interaction => {
     // ===== SLASH COMMANDS =====
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'underreview') {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({
+            content: 'You do not have permission to use this command.',
+            ephemeral: true
+          });
+        }
+
         const embed = new EmbedBuilder()
           .setTitle('🟡 UNDER REVIEW')
           .setDescription(
@@ -179,6 +156,13 @@ Kind regards`
       }
 
       if (interaction.commandName === 'rejected') {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({
+            content: 'You do not have permission to use this command.',
+            ephemeral: true
+          });
+        }
+
         const embed = new EmbedBuilder()
           .setTitle('🔴 REJECTED')
           .setDescription(
@@ -201,6 +185,13 @@ Kind regards`
       }
 
       if (interaction.commandName === 'accepted') {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({
+            content: 'You do not have permission to use this command.',
+            ephemeral: true
+          });
+        }
+
         const embed = new EmbedBuilder()
           .setTitle('🟢 ACCEPTED')
           .setDescription(
@@ -219,6 +210,33 @@ Kind regards`
           .setColor('#57F287');
 
         return interaction.reply({ embeds: [embed] });
+      }
+
+      if (interaction.commandName === 'sendpanel') {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({
+            content: 'You do not have permission to use this command.',
+            ephemeral: true
+          });
+        }
+
+        const channel = await client.channels.fetch(PANEL_CHANNEL_ID);
+        if (!channel) {
+          return interaction.reply({
+            content: 'Panel channel not found.',
+            ephemeral: true
+          });
+        }
+
+        await channel.send({
+          embeds: [buildPanelEmbed()],
+          components: [buildPanelRow()]
+        });
+
+        return interaction.reply({
+          content: 'Panel message sent successfully.',
+          ephemeral: true
+        });
       }
 
       return;
@@ -314,11 +332,18 @@ Kind regards`
       });
     }
 
-    // CLAIM DISABLED
+    // CLAIM
     if (interaction.customId === 'ticket_claim') {
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content: 'You do not have permission to claim tickets.',
+          ephemeral: true
+        });
+      }
+
       return interaction.reply({
-        content: 'Claim system is currently disabled.',
-        ephemeral: true
+        content: `${interaction.user} claimed this ticket.`,
+        ephemeral: false
       });
     }
 
@@ -334,9 +359,12 @@ Kind regards`
         });
       }
 
-      if (interaction.user.id !== ownerId) {
+      const ticketOwnerCanClose = interaction.user.id === ownerId;
+      const staffCanClose = isStaff(interaction.member);
+
+      if (!ticketOwnerCanClose && !staffCanClose) {
         return interaction.reply({
-          content: 'Only the ticket owner can close this ticket.',
+          content: 'Only the ticket owner or HR staff can close this ticket.',
           ephemeral: true
         });
       }
