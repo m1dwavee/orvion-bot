@@ -34,7 +34,7 @@ const HRT_ROLE_ID = '1476659748257402982';
 // EVENT
 const EVENT_CATEGORY_ID = '1475335652420620471';
 const EVENT_MANAGER_ROLE_ID = '1482123095082012886';
-const EVENT_TEAM_ROLE_ID = '1476659748257402982';
+const EVENT_TEAM_ROLE_ID = '1476658320009072707';
 
 // Aynı anda 2 ticket açılmasını engeller
 const pendingTicketOpens = new Set();
@@ -134,7 +134,7 @@ function buildPanelEmbed() {
     .setDescription(
 `Please choose the ticket type below.
 
-🎫 HR Ticket
+📩 HR Ticket
 Use this for applications and HR-related topics.
 
 🎉 Event Ticket
@@ -217,6 +217,7 @@ async function createTicket(interaction, type) {
     let mentionText;
     let embedTitle;
     let embedDescription;
+    let embedColor;
 
     if (type === 'hr') {
       categoryId = HR_CATEGORY_ID;
@@ -225,6 +226,7 @@ async function createTicket(interaction, type) {
       mentionText = `${member} <@&${HRM_ROLE_ID}> <@&${HRT_ROLE_ID}>`;
       embedTitle = '📩 HR Ticket Created';
       embedDescription = `${member}, please describe your HR issue or application in detail.`;
+      embedColor = '#57F287';
     } else {
       categoryId = EVENT_CATEGORY_ID;
       roleIds = [EVENT_MANAGER_ROLE_ID, EVENT_TEAM_ROLE_ID];
@@ -232,6 +234,7 @@ async function createTicket(interaction, type) {
       mentionText = `${member} <@&${EVENT_MANAGER_ROLE_ID}> <@&${EVENT_TEAM_ROLE_ID}>`;
       embedTitle = '🎉 Event Ticket Created';
       embedDescription = `${member}, please describe your event request in detail.`;
+      embedColor = '#5865F2';
     }
 
     const channelName = `${channelPrefix}-${sanitizeChannelName(interaction.user.username)}-${userId.slice(-4)}`;
@@ -273,7 +276,7 @@ async function createTicket(interaction, type) {
     const ticketEmbed = new EmbedBuilder()
       .setTitle(embedTitle)
       .setDescription(embedDescription)
-      .setColor(type === 'hr' ? '#57F287' : '#5865F2')
+      .setColor(embedColor)
       .setTimestamp();
 
     await ticketChannel.send({
