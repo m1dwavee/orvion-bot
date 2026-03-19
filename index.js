@@ -75,6 +75,20 @@ client.once('clientReady', async () => {
     const channel = await client.channels.fetch(PANEL_CHANNEL_ID);
     if (!channel) return console.log('Panel channel not found!');
 
+    const messages = await channel.messages.fetch({ limit: 20 });
+
+    const existingPanel = messages.find(msg =>
+      msg.author.id === client.user.id &&
+      msg.embeds.length > 0 &&
+      msg.embeds[0].title === '📩 Apply Now'
+    );
+
+    if (existingPanel) {
+      console.log('Panel message already exists, skipping...');
+      console.log(`Logged in as ${client.user.tag}`);
+      return;
+    }
+
     const embed = new EmbedBuilder()
       .setTitle('📩 Apply Now')
       .setDescription(
@@ -112,7 +126,8 @@ Please do not hesitate to apply to us.`
       components: [row]
     });
 
-    console.log('Bot online!');
+    console.log('Panel message sent!');
+    console.log(`Logged in as ${client.user.tag}`);
   } catch (error) {
     console.error('Panel send error:', error);
   }
