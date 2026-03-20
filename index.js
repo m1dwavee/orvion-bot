@@ -39,6 +39,7 @@ const EVENT_TEAM_ROLE_ID = '1476658320009072707';
 // MANAGEMENT
 const MANAGEMENT_CATEGORY_ID = '1475335652420620471';
 const FOUNDER_ROLE_ID = '1475225024511082637';
+const PROJECT_MANAGER_ROLE_ID = '1482022945986580665';
 
 // Aynı anda 2 ticket açılmasını engeller
 const pendingTicketOpens = new Set();
@@ -121,7 +122,10 @@ function isEventStaff(member) {
 
 function isManagementStaff(member) {
   if (!member?.roles?.cache) return false;
-  return member.roles.cache.has(FOUNDER_ROLE_ID);
+  return (
+    member.roles.cache.has(FOUNDER_ROLE_ID) ||
+    member.roles.cache.has(PROJECT_MANAGER_ROLE_ID)
+  );
 }
 
 function canClaimTicket(member, type) {
@@ -195,6 +199,14 @@ function buildTicketButtons(claimedBy = null, claimerName = null) {
       .setEmoji('🛄')
       .setStyle(claimedBy ? ButtonStyle.Success : ButtonStyle.Secondary)
       .setDisabled(Boolean(claimedBy)),
+
+    new ButtonBuilder()
+      .setCustomId('ticket_unclaim')
+      .setLabel('Unclaim')
+      .setEmoji('↩️')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!claimedBy),
+
     new ButtonBuilder()
       .setCustomId('ticket_close')
       .setLabel('Close')
@@ -261,9 +273,9 @@ async function createTicket(interaction, type) {
       embedColor = '#5865F2';
     } else {
       categoryId = MANAGEMENT_CATEGORY_ID;
-      roleIds = [FOUNDER_ROLE_ID];
+      roleIds = [FOUNDER_ROLE_ID, PROJECT_MANAGER_ROLE_ID];
       channelPrefix = 'management-ticket';
-      mentionText = `${member} <@&${FOUNDER_ROLE_ID}>`;
+      mentionText = `${member} <@&${FOUNDER_ROLE_ID}> <@&${PROJECT_MANAGER_ROLE_ID}>`;
       embedTitle = '👑 Management Ticket Created';
       embedDescription = `${member}, please describe your request, founder contact reason, or partnership offer in detail.`;
       embedColor = '#FEE75C';
@@ -281,7 +293,8 @@ async function createTicket(interaction, type) {
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ReadMessageHistory
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.AttachFiles
         ]
       }
     ];
@@ -292,7 +305,8 @@ async function createTicket(interaction, type) {
         allow: [
           PermissionFlagsBits.ViewChannel,
           PermissionFlagsBits.SendMessages,
-          PermissionFlagsBits.ReadMessageHistory
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.AttachFiles
         ]
       });
     }
@@ -519,6 +533,57 @@ Kind regards`
 
       await channel.send({
         embeds: [claimEmbed]
+      });
+
+      return;
+    }
+
+    if (interaction.customId === 'ticket_unclaim') {
+      const channel = interaction.channel;
+      const { ownerId, claimedBy, type } = parseTicketTopic(channel.topic);
+
+      if (!ownerId || !type) {
+        return interaction.reply({
+          content: 'This is not a valid ticket.',
+          ephemeral: true
+        });
+      }
+
+      if (!canClaimTicket(interaction.member, type)) {
+        return interaction.reply({
+          content: 'You do not have permission to unclaim this ticket.',
+          ephemeral: true
+        });
+      }
+
+      if (!claimedBy) {
+        return interaction.reply({
+          content: 'This ticket is not claimed.',
+          ephemeral: true
+        });
+      }
+
+      if (claimedBy !== interaction.user.id && !isManagementStaff(interaction.member)) {
+        return interaction.reply({
+          content: 'Only the staff member who claimed this ticket or management can unclaim it.',
+          ephemeral: true
+        });
+      }
+
+      await channel.setTopic(buildTicketTopic(ownerId, type));
+
+      await interaction.update({
+        components: [buildTicketButtons()]
+      });
+
+      const unclaimEmbed = new EmbedBuilder()
+        .setTitle('↩️ Ticket Unclaimed')
+        .setDescription(`This ${type} ticket has been unclaimed by ${interaction.user}.`)
+        .setColor('#FAA61A')
+        .setTimestamp();
+
+      await channel.send({
+        embeds: [unclaimEmbed]
       });
 
       return;
